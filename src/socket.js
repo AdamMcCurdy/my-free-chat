@@ -1,43 +1,55 @@
-import io from 'socket.io-client';
+const app = require('express')();
+const server = require('http').Server(app);
+const io = require('socket.io')(server);
+const cors = require('cors');
 
-const socket = io('http://localhost:8000');
+// we will use port 8000 for our app
+server.listen(8000, () => console.log('connected to port 8000!'));
 
-const configureSocket = dispatch => {
-  // make sure our socket is connected to the port
-  socket.on('connect', () => {
-    console.log('connected');
+// only use this for dev purposes
+app.use(cors());
+
+let pot = 0;
+let names = [];
+let serverNames = [];
+io.on('connection', socket => {
+  // below we listen if our pot is updated
+  // then emit an event to all connected sockets about the update
+  socket.on('UPDATE_POT', state => {
+    pot = state.pot;
+    socket.broadcast.emit('UPDATED_POT', state);
   });
 
-  // the socket.on method is like an event listener
-  // just like how our redux reducer works
-  // the different actions that our socket/client will emit
-  // is catched by these listeners
-  socket.on('UPDATED_POT', state => {
-    dispatch({ type: 'DELIVER_UPDATED_POT_TO_REDUCER', updatedPot: state });
+  // get the current pot's value and emit it to clients
+  socket.on('GET_CURRENT_POT', () => socket.emit('CURRENT_POT', pot));
+
+  // add the newest client to the list of active clients
+  // then broadcast that to all connected clienhts 
+  socket.on('SEND_NAME_TO_SERVER', name => {
+    serverNames = [...serverNames, { socketId: socket.id, name }];
+    names = [...names, name];
+    socket.broadcast.emit('SEND_NAMES_TO_CLIENTS', names);
+    socket.emit('SEND_NAMES_TO_CLIENTS', names);
   });
-  socket.on('GUESS_WHO_PITCHED_IN', name => {
-    dispatch({ type: 'PICTHED_IN', name });
+
+  // broadcast to everyone if somebody pitched in
+  socket.on('SOMEONE_PITCHED_IN', name => {
+    socket.broadcast.emit('GUESS_WHO_PITCHED_IN', name);
   });
-  socket.on('CURRENT_POT', pot =>
-    dispatch({ type: 'CURRENT_POT_TO_REDUCER', pot: pot })
-  );
-  socket.on('SEND_NAMES_TO_CLIENTS', names =>
-    dispatch({ type: 'PUT_ALL_NAMES_TO_REDUCER', names })
-  );
-  socket.on('GUESS_WHO_GOT_ONE', name => dispatch({ type: 'GOT_ONE', name }));
-  return socket;
-};
 
-// the following are fucntions that our client side uses
-// to emit actions to everyone connected to our web socket
-export const getCurrentPot = () => socket.emit('GET_CURRENT_POT');
+  // broadcast to everyone if somebody got one
+  socket.on('SOMEONE_GOT_ONE', name => {
+    socket.broadcast.emit('GUESS_WHO_GOT_ONE', name);
+  });
 
-export const sendNameToServer = name =>
-  socket.emit('SEND_NAME_TO_SERVER', name);
 
-export const sendPitchInToServer = name =>
-  socket.emit('SOMEONE_PITCHED_IN', name);
-
-export const sendGetOneToServer = name => socket.emit('SOMEONE_GOT_ONE', name);
-
-export default configureSocket;
+  // this is to make sure that when a client disconnects
+  // the client's name will be removed from our server's list of names
+  // then broadcast that to everybody connected so their list will be updated
+  socket.on('disconnect', () => {
+    serverNames = serverNames.filter(data => data.socketId !== socket.id);
+    names = serverNames.map(data => data.name);
+    socket.broadcast.emit('SEND_NAMES_TO_CLIENTS', names);
+    socket.emit('SEND_NAMES_TO_CLIENTS', names);
+  });
+});
